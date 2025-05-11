@@ -2,3 +2,5 @@
 /.vscode
 /.idea
 /.gnupg
+*.db
+/backend/utils/__pycache__

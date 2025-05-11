@@ -4,9 +4,6 @@ import os
 # set database name
 DB_NAME = 'books.db' # test
 
-def get_db_path():
-    print("") # todo!
-
 # connect to the database
 def connect_db(db_name):
     return sqlite3.connect(db_name)
@@ -48,13 +45,14 @@ def insert_sample_data(conn):
     conn.commit()
 
 # main function to run the script
-def main():
-    conn = connect_db(DB_NAME)
+def INIT_TEST_DB(db_name):
+    conn = connect_db(db_name)
     create_table(conn)
     insert_sample_data(conn)
     conn.close()
-    print(f"Database '{DB_NAME}' created with sample data.")
+    print("")
+    print(f"initialized db '{DB_NAME}' with sample data.")
 
 # execute main if the script is run directly
 if __name__ == "__main__":
-    main()
+    INIT_TEST_DB(DB_NAME)
