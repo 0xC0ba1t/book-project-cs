@@ -1,5 +1,5 @@
 import sqlite3
-from backend.generate_sample_test_db import *
+from backend.utils.generate_sample_test_db import *
 from backend.utils.generate_sample_test_db import DB_NAME
 from backend.utils.generate_sample_test_db import connect_db
 
