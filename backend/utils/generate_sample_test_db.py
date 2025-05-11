@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import sys
 
 # set database name
 DB_NAME = 'books.db' # test
@@ -50,8 +51,9 @@ def INIT_TEST_DB(db_name):
     create_table(conn)
     insert_sample_data(conn)
     conn.close()
-    print("")
-    print(f"initialized db '{DB_NAME}' with sample data.")
+    if "--verbose" in sys.argv:
+        print("")
+        print(f"initialized db '{DB_NAME}' with sample data.")
 
 # execute main if the script is run directly
 if __name__ == "__main__":

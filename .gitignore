@@ -4,3 +4,4 @@
 /.gnupg
 *.db
 /backend/utils/__pycache__
+/gui
