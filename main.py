@@ -15,4 +15,11 @@ print("")
 print(f"connection established to db: {DB_NAME}")
 print("")
 
-show_contents = db.execute("SELECT * FROM 'books'") # testing
+# fetch and display first 5 rows from the books table
+def show_all_books(connect_to):
+    cursor = connect_to.cursor()
+    cursor.execute("SELECT * FROM books LIMIT 0,5")
+    rows = cursor.fetchall()
+    for row in rows:
+        print(row)
+show_all_books(db)
