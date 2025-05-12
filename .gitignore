@@ -5,3 +5,5 @@
 *.db
 /backend/utils/__pycache__
 /gui
+/.bun
+/backend/__pycache__

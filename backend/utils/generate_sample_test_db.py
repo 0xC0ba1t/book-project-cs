@@ -3,7 +3,7 @@ import os
 import sys
 
 # set database name
-DB_NAME = 'books.db' # test
+DB_NAME = 'books.db'  # test
 
 # connect to the database
 def connect_db(db_name):
@@ -45,15 +45,24 @@ def insert_sample_data(conn):
     ''', books_data)
     conn.commit()
 
-# main function to run the script
+# initialize test database
 def INIT_TEST_DB(db_name):
+    # delete existing db if it exists
+    if os.path.exists(db_name):
+        os.remove(db_name)
+        if "--verbose" in sys.argv:
+            print("")
+            print(f"existing db '{db_name}' deleted.")
+
+    # create new db and insert sample data
     conn = connect_db(db_name)
     create_table(conn)
     insert_sample_data(conn)
     conn.close()
+
     if "--verbose" in sys.argv:
         print("")
-        print(f"initialized db '{DB_NAME}' with sample data.")
+        print(f"initialized new db '{db_name}' with sample data.")
 
 # execute main if the script is run directly
 if __name__ == "__main__":
