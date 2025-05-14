@@ -1,11 +1,15 @@
 from fastapi import Depends, FastAPI, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import os
 import sqlite3
 from typing import Optional
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+import firebase_admin
+from firebase_admin import credentials, firestore
+from pydantic import BaseModel
 
 from utils.generate_sample_test_db import DB_NAME, connect_db, INIT_TEST_DB
 
@@ -15,9 +19,28 @@ INIT_TEST_DB(DB_NAME)
 # create app
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or your frontend domain
+    allow_credentials=True,
+    allow_methods=["*"],  # Or explicitly ["POST"]
+    allow_headers=["*"],  # Or explicitly ["Content-Type"]
+)
+
 # setup global rate limiter
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
+
+# Only initialize once
+if not firebase_admin._apps:
+    cred = credentials.Certificate("csbook-recommender-firebase-adminsdk-fbsvc-febd92a62e.json")
+    firebase_admin.initialize_app(cred)
+
+db_firestore = firestore.client()
+
+class UserPreferences(BaseModel):
+    user_id: str  # unique identifier for the user
+    preferences: dict  # generic structure for user preferences
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
@@ -46,6 +69,16 @@ def verify_password(password: str = Query(..., alias="password")):
             detail="Invalid password"
         )
 
+# Utility function to get unique authors
+def get_unique_authors():
+    db_path = os.path.join(os.getcwd(), DB_NAME)
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT author FROM books ORDER BY author ASC")
+    authors = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return authors
+
 # fetch books, optional limit
 @app.get("/dump-db")
 @limiter.limit("9/minute")
@@ -68,6 +101,79 @@ def dump_db(request: Request, password: str = Depends(verify_password), limit: O
 
     books = [dict(row) for row in rows]
     return {"books": books}
+
+@app.post("/save-preferences")
+@limiter.limit("10/minute")
+def save_preferences(
+    request: Request,
+    prefs: UserPreferences
+):
+    doc_ref = db_firestore.collection("user_preferences").document(prefs.user_id)
+    doc_ref.set(prefs.preferences)
+    return {"message": "Preferences saved successfully"}
+
+@app.get("/load-preferences")
+@limiter.limit("10/minute")
+def load_preferences(request: Request, user_id: str = Query(...)):
+    doc_ref = db_firestore.collection("user_preferences").document(user_id)
+    doc = doc_ref.get()
+    if doc.exists:
+        return {"preferences": doc.to_dict()}
+    else:
+        raise HTTPException(status_code=404, detail="Preferences not found")
+
+@app.get("/recommend-books")
+@limiter.limit("10/minute")
+def recommend_books(request: Request, user_id: str = Query(...)):
+    # 1. Get preferences from Firestore
+    doc_ref = db_firestore.collection("user_preferences").document(user_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="User preferences not found")
+
+    prefs = doc.to_dict()
+
+    # 2. Parse preferences
+    age = int(prefs.get("age", 0))
+    budget = float(prefs.get("budget", 0))
+    genres = prefs.get("genres", [])
+    authors = prefs.get("authors", [])
+    author_pref = prefs.get("author_preference", False)
+
+    # 3. Build query
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    query = "SELECT * FROM books WHERE cost <= ?"
+    params = [budget]
+
+    # Age rating comparison
+    # Assume age_rating column values like "13+" → extract number
+    query += " AND CAST(SUBSTR(age_rating, 1, INSTR(age_rating, '+') - 1) AS INTEGER) <= ?"
+    params.append(age)
+
+    if genres:
+        placeholders = ','.join('?' for _ in genres)
+        query += f" AND genre IN ({placeholders})"
+        params.extend(genres)
+
+    if author_pref and authors:
+        placeholders = ','.join('?' for _ in authors)
+        query += f" AND author IN ({placeholders})"
+        params.extend(authors)
+
+    # 4. Execute and return
+    cursor.execute(query, tuple(params))
+    books = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    return {"recommended_books": books}
+
+# API endpoint to get all unique authors
+@app.get("/authors", summary="Get all unique authors", tags=["Books"])
+def list_authors():
+    return {"authors": get_unique_authors()}
 
 # root route
 @app.get("/")
