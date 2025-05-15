@@ -1,4 +1,4 @@
-from fastapi import Depends, FastAPI, HTTPException, Request, Query
+from fastapi import Depends, FastAPI, HTTPException, Request, Query, Header
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -21,17 +21,17 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Or your frontend domain
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Or explicitly ["POST"]
-    allow_headers=["*"],  # Or explicitly ["Content-Type"]
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # setup global rate limiter
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 
-# Only initialize once
+# Only initialize Firebase once
 if not firebase_admin._apps:
     cred = credentials.Certificate("csbook-recommender-firebase-adminsdk-fbsvc-febd92a62e.json")
     firebase_admin.initialize_app(cred)
@@ -39,13 +39,13 @@ if not firebase_admin._apps:
 db_firestore = firestore.client()
 
 class UserPreferences(BaseModel):
-    user_id: str  # unique identifier for the user
-    preferences: dict  # generic structure for user preferences
+    user_id: str
+    preferences: dict
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     headers = getattr(exc, "headers", {})
-    retry_after = headers.get("Retry-After", "60")  # use default 60s if missing
+    retry_after = headers.get("Retry-After", "60")
     return JSONResponse(
         status_code=429,
         content={
@@ -55,21 +55,23 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         headers={"Retry-After": retry_after}
     )
 
-# helper to get db connection
 def get_db():
     db_path = os.path.join(os.getcwd(), DB_NAME)
     conn = sqlite3.connect(db_path)
     return conn
 
-def verify_password(password: str = Query(..., alias="password")):
-    correct_password = "sudo"
-    if password != correct_password:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid password"
-        )
+def verify_password(authorization: str = Header(..., alias="Authorization")):
+    correct_password = os.getenv("API_PASSWORD")
+    if not correct_password:
+        raise HTTPException(status_code=500, detail="Server misconfigured")
 
-# Utility function to get unique authors
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization format")
+
+    token = authorization.split("Bearer ")[-1]
+    if token != correct_password:
+        raise HTTPException(status_code=401, detail="Invalid API password")
+
 def get_unique_authors():
     db_path = os.path.join(os.getcwd(), DB_NAME)
     conn = sqlite3.connect(db_path)
@@ -79,14 +81,13 @@ def get_unique_authors():
     conn.close()
     return authors
 
-# fetch books, optional limit
 @app.get("/dump-db")
 @limiter.limit("9/minute")
-def dump_db(request: Request, password: str = Depends(verify_password), limit: Optional[int] = Query(None, gt=0, le=100)):
-    """
-    dump books from database
-    limit = optional number of books to return
-    """
+def dump_db(
+    request: Request,
+    password: str = Depends(verify_password),
+    limit: Optional[int] = Query(None, gt=0, le=100)
+):
     conn = get_db()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -106,7 +107,8 @@ def dump_db(request: Request, password: str = Depends(verify_password), limit: O
 @limiter.limit("10/minute")
 def save_preferences(
     request: Request,
-    prefs: UserPreferences
+    prefs: UserPreferences,
+    password: str = Depends(verify_password)
 ):
     doc_ref = db_firestore.collection("user_preferences").document(prefs.user_id)
     doc_ref.set(prefs.preferences)
@@ -114,7 +116,11 @@ def save_preferences(
 
 @app.get("/load-preferences")
 @limiter.limit("10/minute")
-def load_preferences(request: Request, user_id: str = Query(...)):
+def load_preferences(
+    request: Request,
+    user_id: str = Query(...),
+    password: str = Depends(verify_password)
+):
     doc_ref = db_firestore.collection("user_preferences").document(user_id)
     doc = doc_ref.get()
     if doc.exists:
@@ -124,32 +130,29 @@ def load_preferences(request: Request, user_id: str = Query(...)):
 
 @app.get("/recommend-books")
 @limiter.limit("10/minute")
-def recommend_books(request: Request, user_id: str = Query(...)):
-    # 1. Get preferences from Firestore
+def recommend_books(
+    request: Request,
+    user_id: str = Query(...),
+    password: str = Depends(verify_password)
+):
     doc_ref = db_firestore.collection("user_preferences").document(user_id)
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="User preferences not found")
 
     prefs = doc.to_dict()
-
-    # 2. Parse preferences
     age = int(prefs.get("age", 0))
     budget = float(prefs.get("budget", 0))
     genres = prefs.get("genres", [])
     authors = prefs.get("authors", [])
     author_pref = prefs.get("author_preference", False)
 
-    # 3. Build query
     conn = get_db()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
     query = "SELECT * FROM books WHERE cost <= ?"
     params = [budget]
-
-    # Age rating comparison
-    # Assume age_rating column values like "13+" → extract number
     query += " AND CAST(SUBSTR(age_rating, 1, INSTR(age_rating, '+') - 1) AS INTEGER) <= ?"
     params.append(age)
 
@@ -163,19 +166,18 @@ def recommend_books(request: Request, user_id: str = Query(...)):
         query += f" AND author IN ({placeholders})"
         params.extend(authors)
 
-    # 4. Execute and return
     cursor.execute(query, tuple(params))
     books = [dict(row) for row in cursor.fetchall()]
     conn.close()
 
     return {"recommended_books": books}
 
-# API endpoint to get all unique authors
 @app.get("/authors", summary="Get all unique authors", tags=["Books"])
-def list_authors():
+def list_authors(
+    password: str = Depends(verify_password)
+):
     return {"authors": get_unique_authors()}
 
-# root route
 @app.get("/")
 @limiter.limit("15/minute")
 def read_root(request: Request):
