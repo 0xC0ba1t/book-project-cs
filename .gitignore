@@ -8,3 +8,6 @@
 /.bun
 /backend/__pycache__
 csbook-recommender-firebase-adminsdk-fbsvc-febd92a62e.json
+.cursor-server
+.vscode-server
+.windsurf-server
