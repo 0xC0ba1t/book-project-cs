@@ -44,15 +44,23 @@ class UserPreferences(BaseModel):
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    headers = getattr(exc, "headers", {})
+    # Safely handle missing headers
+    headers = getattr(exc, "headers", None) or {}
+    
     retry_after = headers.get("Retry-After", "60")
+    
+    try:
+        retry_after_seconds = int(retry_after)
+    except ValueError:
+        retry_after_seconds = 60  # fallback to default
+
     return JSONResponse(
         status_code=429,
         content={
             "detail": "Rate limit exceeded. Please retry later.",
-            "retry_after_seconds": int(retry_after)
+            "retry_after_seconds": retry_after_seconds
         },
-        headers={"Retry-After": retry_after}
+        headers={"Retry-After": str(retry_after_seconds)}
     )
 
 def get_db():
